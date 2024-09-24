@@ -160,6 +160,8 @@ static const char* detectCoreTypes(FFCPUResult* cpu)
     return NULL;
 }
 
+const char* detectThermalTemp(double* current, double* critical);
+
 const char* ffDetectCPUImpl(const FFCPUOptions* options, FFCPUResult* cpu)
 {
     detectNCores(cpu);
@@ -175,7 +177,7 @@ const char* ffDetectCPUImpl(const FFCPUOptions* options, FFCPUResult* cpu)
         detectMaxSpeedBySmbios(cpu);
 
     if(options->temp)
-        ffDetectSmbiosTemp(&cpu->temperature, NULL);
+        detectThermalTemp(&cpu->temperature, NULL);
 
     return NULL;
 }
