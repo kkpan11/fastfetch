@@ -1,12 +1,17 @@
 #include "netif.h"
 
 #include "common/io/io.h"
+#include "util/mallocHelper.h"
 
 #include <net/if.h>
 #include <net/if_dl.h>
 #include <net/route.h>
 #include <netinet/in.h>
 #include <sys/socket.h>
+
+#ifdef __OpenBSD__
+    #include <sys/sysctl.h>
+#endif
 
 #define ROUNDUP2(a, n)       ((a) > 0 ? (1 + (((a) - 1U) | ((n) - 1))) : (n))
 
@@ -47,6 +52,37 @@ get_rt_address(struct rt_msghdr *rtm, int desired)
 
 bool ffNetifGetDefaultRouteImpl(char iface[IF_NAMESIZE + 1], uint32_t* ifIndex)
 {
+    #if defined(__OpenBSD__)
+    int mib[6] = {CTL_NET, PF_ROUTE, 0, AF_INET, NET_RT_FLAGS, RTF_GATEWAY};
+    size_t needed;
+
+    if (sysctl(mib, 6, NULL, &needed, NULL, 0) < 0)
+        return false;
+
+    FF_AUTO_FREE char* buf = malloc(needed);
+
+    if (sysctl(mib, 6, buf, &needed, NULL, 0) < 0)
+        return false;
+
+    char* lim = buf + needed;
+    struct rt_msghdr* rtm;
+    for (char* next = buf; next < lim; next += rtm->rtm_msglen) {
+        rtm = (struct rt_msghdr *)next;
+        struct sockaddr* sa = (struct sockaddr *)(rtm + 1);
+
+        if ((rtm->rtm_flags & RTF_GATEWAY) &&
+            (sa->sa_family == AF_INET)) {
+            struct sockaddr_dl* sdl = (struct sockaddr_dl *)get_rt_address(rtm, RTA_IFP);
+            if (sdl->sdl_family == AF_LINK) {
+                assert(sdl->sdl_nlen <= IF_NAMESIZE);
+                memcpy(iface, sdl->sdl_data, sdl->sdl_nlen);
+                iface[sdl->sdl_nlen] = '\0';
+                *ifIndex = sdl->sdl_index;
+                return true;
+            }
+        }
+    }
+    #else
     //https://github.com/hashPirate/copenheimer-masscan-fork/blob/36f1ed9f7b751a7dccd5ed27874e2e703db7d481/src/rawsock-getif.c#L104
 
     FF_AUTO_CLOSE_FD int pfRoute = socket(PF_ROUTE, SOCK_RAW, AF_INET);
@@ -69,6 +105,11 @@ bool ffNetifGetDefaultRouteImpl(char iface[IF_NAMESIZE + 1], uint32_t* ifIndex)
         .hdr = {
             .rtm_type = RTM_GET,
             .rtm_flags = RTF_UP | RTF_GATEWAY,
+            #ifdef __OpenBSD__
+            .rtm_addrs = RTA_DST | RTA_IFA,
+            #else
+            .rtm_addrs = RTA_DST | RTA_IFP,
+            #endif
             .rtm_version = RTM_VERSION,
             .rtm_addrs = RTA_DST | RTA_IFP,
             .rtm_msglen = sizeof(rtmsg.hdr) + sizeof(rtmsg.dst),
@@ -106,5 +147,7 @@ bool ffNetifGetDefaultRouteImpl(char iface[IF_NAMESIZE + 1], uint32_t* ifIndex)
             return false;
         }
     }
+    #endif
+
     return false;
 }
